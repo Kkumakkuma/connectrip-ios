@@ -1,0 +1,41 @@
+{
+  "name": "커넥트립 ConnectTrip - 여행자와 승무원을 연결하는 여행 플랫폼",
+  "short_name": "ConnectTrip",
+  "description": "커넥트립(ConnectTrip) - 여행자와 승무원을 연결하는 여행 플랫폼. 동행 찾기·여행 Q&A·물품거래·승무원 추천이 있고, 여행 플래너로 날짜별 일정과 이동 동선도 짤 수 있어요.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "categories": [
+    "travel",
+    "social"
+  ],
+  "lang": "ko"
+}

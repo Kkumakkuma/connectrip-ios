@@ -1,0 +1,1 @@
+import{B as c}from"./index-B3Y4EJ12.js";async function t(a){try{const{data:n,error:e}=await c.rpc("check_nickname_taken",{p_nickname:a});return e||n===null||n===void 0?null:!!n}catch{return null}}export{t as c};

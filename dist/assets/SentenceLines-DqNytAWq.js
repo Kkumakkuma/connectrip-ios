@@ -1,0 +1,1 @@
+import{j as i}from"./ui-D9K4Ib88.js";import{r as o}from"./react-vendor-DIgq3VVf.js";function c(t){const r=/[.!?]\s+(?=\S)/g,s=[];let e=0,n;for(;(n=r.exec(t))!==null;)s.push(t.slice(e,n.index+1)),e=n.index+n[0].length;return s.push(t.slice(e)),s}function a({text:t}){return c(String(t??"")).map((s,e)=>i.jsxs(o.Fragment,{children:[e>0&&i.jsx("br",{}),s]},e))}export{a as S};

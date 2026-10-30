@@ -1,0 +1,15 @@
+User-agent: *
+Allow: /
+Disallow: /app.html
+Disallow: /admin
+Disallow: /mypage
+Disallow: /points
+Disallow: /api/payment/
+Disallow: /crew
+Disallow: /planner/t/
+Disallow: /planner/import
+Disallow: /api/planner/
+
+Sitemap: https://www.connecttrip.co.kr/sitemap.xml
+
+#DaumWebMasterTool:dd6df75a7d6d108994049995f7194ecf163971481cd6de8fb2292365b8c817dc:sQJG/Wp2eeNqqbQj8JLcHA==

@@ -1,0 +1,17 @@
+{
+  "app": "com.connecttrip.app",
+  "version": "1.3.22",
+  "versionCode": 30,
+  "source": "752f635",
+  "builtAt": "2026-10-30T06:13:00.468Z",
+  "push": true,
+  "publicValues": [
+    "SUPABASE_URL",
+    "SUPABASE_ANON_KEY",
+    "PORTONE_STORE_ID",
+    "PORTONE_CHANNEL_KEY",
+    "KAKAO_JS_KEY",
+    "GOOGLE_MAPS_BROWSER_KEY",
+    "GOOGLE_MAPS_MAP_ID"
+  ]
+}

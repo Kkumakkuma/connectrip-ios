@@ -1,0 +1,1 @@
+import{j as e,g as r}from"./ui-D9K4Ib88.js";const a=({isPrivate:s,className:n=""})=>s?e.jsxs("span",{className:`inline-flex items-center gap-1 rounded-full bg-surface-strong px-2 py-0.5 text-[11px] font-bold text-ink whitespace-nowrap ${n}`,children:[e.jsx(r,{size:11,"aria-hidden":"true"}),e.jsx("span",{children:"나만 보기"})]}):null;export{a as P};

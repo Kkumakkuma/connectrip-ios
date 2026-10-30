@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="ko">
+
+<head>
+  <meta charset="UTF-8" />
+  <!-- 파비콘·앱 아이콘은 scripts/gen-icons.py 가 assets/icon-only.png(하트+비행기 마크)에서 한꺼번에 굽는다.
+       구글은 사이트당 아이콘 하나만 쓰고 48x48 보다 큰 정사각형을 권장하므로 48·96·192 도 같은 그림으로 선언한다.
+       /favicon.ico 를 실제 파일로 두는 이유: 없으면 vercel.json 의 SPA 리라이트가 index.html 을 돌려준다. -->
+  <link rel="icon" type="image/x-icon" sizes="16x16 32x32 48x48" href="/favicon.ico" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png" />
+  <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <script>
+    // 화면 배율 고정(2026-10-18 쿠마님 11991 "화면이 확대되면서 지멋대로, 글자가 짤려서 좌우 아래위로 옮기면서 봐야").
+    // 아이폰(사파리·앱)은 16px 보다 작은 글자 칸을 누르면 화면을 확대하고 되돌리지 않는다 → 최대 배율 1로 막는다
+    // (사파리는 그래도 두 손가락 확대를 허용한다). 앱(Capacitor, 아이폰·안드로이드)은 두 손가락 확대도 막아 비율을 고정한다.
+    // 안드로이드 크롬·PC 웹은 그대로 둔다(확대가 필요한 사람의 접근성). 이 줄은 화면을 그리기 전에 돈다.
+    (function () {
+      try {
+        var ua = navigator.userAgent || '';
+        var ios = /iP(hone|ad|od)/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+        var app = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+        if (!ios && !app) return;
+        var m = document.querySelector('meta[name="viewport"]');
+        if (m) m.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0' + (app ? ', user-scalable=no' : '') + ', viewport-fit=cover');
+      } catch (e) { /* 배율 고정 실패해도 화면은 그대로 뜬다 */ }
+    })();
+  </script>
+  <meta name="theme-color" content="#2563eb" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <!-- 앱스토어 받기 띠(Smart App Banner, 10/29 쿠마님 13256 '넣어봐'): 아이폰·아이패드 사파리만 읽고, 안드로이드·윈도우 브라우저와 앱 안 WebView 는 무시한다.
+       app-argument 는 넣지 않는다 — 앱이 깔려 있으면 '열기'로 앱만 열고, 특정 화면으로 보내지는 않는다(앱 딥링크는 app-return 전용). -->
+  <meta name="apple-itunes-app" content="app-id=6822638767" />
+  <meta name="description" content="커넥트립(ConnectTrip) - 여행자와 승무원을 연결하는 여행 플랫폼. 동행 찾기·여행 Q&A·물품거래·승무원 추천이 있고, 여행 플래너로 날짜별 일정과 이동 동선도 짤 수 있어요." />
+  <meta name="keywords" content="여행 동행, 승무원, 여행 정보, 물품거래, 여행 Q&A, ConnectTrip, 커넥트립" />
+  <meta name="robots" content="index, follow" />
+  <meta name="author" content="ConnectTrip" />
+  <meta name="naver-site-verification" content="d4cc6336c3378379f11845dc041160276e986227" />
+  <script>
+    // 첫 화면 계절 사진(2026-10-22 쿠마님 테스트 의견) — src/lib/heroPhotos.js 와 같은 규칙으로 첫 페인트 전에 한 장 고르고
+    // (한국 시간 달 → 계절, 그 계절 사진 중 무작위, 폭 768 이하는 폰용 -m), 홈('/')으로 들어왔으면 미리 받는다.
+    // 앱은 사진을 번들에 넣지 않고 사이트 주소로 불러온다. C(기본 장수)나 규칙을 바꾸면 heroPhotos.js·public/hero/manifest.json 도 같이 — heroPhotos.test.js 가 맞춰 본다.
+    (function () {
+      try {
+        var C = {"spring":6,"summer":6,"autumn":6,"winter":6};
+        try {
+          // 마지막으로 받아 둔 장수(public/hero/manifest.json, heroPhotos.js refreshHeroCounts) — 사진을 늘려도 앱 업데이트 없이 반영
+          var sv = JSON.parse(localStorage.getItem('ct_hero_counts') || 'null');
+          if (sv && ['spring', 'summer', 'autumn', 'winter'].every(function (k) { return sv[k] >= 1 && sv[k] <= 60 && sv[k] % 1 === 0; })) C = sv;
+        } catch (e2) { /* 기본 장수로 */ }
+        var m = new Date(Date.now() + 9 * 3600 * 1000).getUTCMonth() + 1;
+        var s = m >= 3 && m <= 5 ? 'spring' : m >= 6 && m <= 8 ? 'summer' : m >= 9 && m <= 11 ? 'autumn' : 'winter';
+        var n = Math.min(C[s], Math.floor(Math.random() * C[s]) + 1);
+        var app = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+        var u = (app ? 'https://www.connecttrip.co.kr' : '') + '/hero/' + s + '-' + (n < 10 ? '0' : '') + n + (window.innerWidth <= 768 ? '-m' : '') + '.webp';
+        window.__CT_HERO__ = u;
+        if (location.pathname === '/' || location.pathname === '/index.html') {
+          var l = document.createElement('link');
+          l.setAttribute('rel', 'preload'); l.setAttribute('as', 'image'); l.setAttribute('href', u); l.setAttribute('fetchpriority', 'high');
+          document.head.appendChild(l);
+        }
+      } catch (e) { /* 실패하면 Hero.jsx 가 직접 고른다 */ }
+    })();
+  </script>
+  <link rel="canonical" href="https://www.connecttrip.co.kr/" />
+
+  <!-- 폰트: 과거엔 index.css 의 @import 로 불러와 (HTML→번들CSS→폰트CSS→woff2) 4단 요청 체인이
+       전부 렌더를 막았다. head 의 link 로 올려 폰트 CSS 를 번들 CSS 와 병렬로 받게 한다.
+       preconnect 2줄 = 폰트 CSS(비-CORS)와 woff2(CORS)가 서로 다른 커넥션 풀을 쓰기 때문.
+       static 판(가중치별 풀 woff2 약 770KB × 6종)이 아니라 variable dynamic-subset 판을 쓴다
+       — unicode-range 로 실제 쓰인 글자 조각만 받는다. font-display:swap 은 이 CSS에 포함돼 있다. -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="stylesheet" media="print" onload="this.onload=null;this.media='all'"
+    href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css" />
+
+  <!-- 홈 카테고리 카드 6장이 images.unsplash.com 에서 온다. loading="lazy" 라 첫 페인트는 안 막지만
+       스크롤이 닿는 순간 DNS+TLS 부터 시작해 6장이 한꺼번에 밀린다. 미리 커넥션을 열어 둔다.
+       img 태그에 crossorigin 속성이 없어 비-CORS 요청이므로 preconnect 도 crossorigin 없이 건다
+       (붙이면 다른 커넥션 풀이라 재사용되지 않는다). dns-prefetch 는 preconnect 미지원 대비 폴백. -->
+  <link rel="preconnect" href="https://images.unsplash.com" />
+  <link rel="dns-prefetch" href="https://images.unsplash.com" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="커넥트립 ConnectTrip - 여행자와 승무원을 연결하는 여행 플랫폼" />
+  <meta property="og:description" content="커넥트립(ConnectTrip) - 여행자와 승무원을 연결하는 여행 플랫폼. 동행 찾기·여행 Q&A·물품거래·승무원 추천이 있고, 여행 플래너로 날짜별 일정과 이동 동선도 짤 수 있어요." />
+  <meta property="og:image" content="https://www.connecttrip.co.kr/og-image.jpg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:url" content="https://www.connecttrip.co.kr/" />
+  <meta property="og:site_name" content="커넥트립" />
+  <meta property="og:locale" content="ko_KR" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="커넥트립 ConnectTrip - 여행자와 승무원을 연결하는 여행 플랫폼" />
+  <meta name="twitter:description" content="커넥트립(ConnectTrip) - 여행자와 승무원을 연결하는 여행 플랫폼. 동행 찾기·여행 Q&A·물품거래·승무원 추천이 있고, 여행 플래너로 날짜별 일정과 이동 동선도 짤 수 있어요." />
+  <meta name="twitter:image" content="https://www.connecttrip.co.kr/og-image.jpg" />
+
+  <!-- Structured Data: WebSite -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": "커넥트립",
+    "alternateName": ["ConnectTrip", "커넥트립 ConnectTrip"],
+    "url": "https://www.connecttrip.co.kr",
+    "description": "여행자와 승무원을 연결하고, 여행 플래너로 날짜별 일정까지 짤 수 있는 여행 정보 공유 플랫폼",
+    "inLanguage": "ko",
+    "potentialAction": {
+      "@type": "SearchAction",
+      "target": "https://www.connecttrip.co.kr/search?q={search_term_string}",
+      "query-input": "required name=search_term_string"
+    }
+  }
+  </script>
+
+  <!-- Structured Data: Organization -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "name": "커넥트립",
+    "alternateName": ["ConnectTrip", "커넥트립 ConnectTrip"],
+    "url": "https://www.connecttrip.co.kr",
+    "logo": "https://www.connecttrip.co.kr/favicon-192.png",
+    "description": "여행자와 승무원을 연결하고, 여행 플래너로 날짜별 일정까지 짤 수 있는 여행 정보 공유 플랫폼",
+    "sameAs": [],
+    "contactPoint": {
+      "@type": "ContactPoint",
+      "contactType": "customer service",
+      "availableLanguage": ["Korean"]
+    }
+  }
+  </script>
+
+  <!-- 카카오 JS SDK(85.5KB / gzip 28.5KB)는 여기서 로드하지 않는다. 쓰는 곳이 ShareButtons 하나뿐이고
+       그 컴포넌트는 lazy 라우트에만 붙어 있어, 홈·회원가입·마이페이지에서는 받아도 쓰이지 않았다.
+       공유 메뉴를 열 때 ShareButtons.jsx 의 loadKakaoSdk() 가 동적으로 주입한다. -->
+
+  <title>커넥트립 ConnectTrip - 여행자와 승무원을 연결하는 여행 플랫폼</title>
+<style id="ct-boot-bg">html,body{background:#185069!important}</style>  <script type="module" crossorigin src="/assets/index-B3Y4EJ12.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/react-vendor-DIgq3VVf.js">
+  <link rel="modulepreload" crossorigin href="/assets/ui-D9K4Ib88.js">
+  <link rel="modulepreload" crossorigin href="/assets/supabase-6ZnCr132.js">
+  <link rel="stylesheet" crossorigin href="/assets/index-BM7SCDiQ.css">
+</head>
+
+<body>
+  <div id="root"><div aria-hidden="true" style="position:fixed;inset:0;background:#185069"></div></div>
+  <script>
+    // 오래된 서비스워커·캐시 정리. 스테일 번들이 남는 것을 막는 장치다.
+    // (앱(Capacitor)에서는 실행하지 않는다.)
+    //
+    // 2026-09-04: 전면 제거에서 **스코프 필터**로 바꿨다. 플래너는 /planner 스코프 전용
+    // 서비스워커를 쓰는데(티켓 지갑 오프라인), 여기서 전부 지우면 매 로드마다
+    // 등록→해제가 반복돼 캐시가 계속 날아간다. 이 인라인 스크립트는 defer module 보다
+    // 먼저 도는 탓에 필터가 없으면 등록 자체가 의미를 잃는다.
+    if ('serviceWorker' in navigator && !window.Capacitor?.isNativePlatform?.()) {
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        registrations.forEach(function(reg) {
+          var scope = (reg.scope || '');
+          if (scope.indexOf('/planner') === -1) reg.unregister();
+        });
+      });
+      caches.keys().then(function(names) {
+        names.forEach(function(name) {
+          if (name.indexOf('ct-planner-') !== 0) caches.delete(name);
+        });
+      });
+    }
+  </script>
+</body>
+
+</html>
