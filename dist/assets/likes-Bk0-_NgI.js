@@ -1,0 +1,1 @@
+import{m as r}from"./moderation-0XYl-YMf.js";const i="내 글에는 좋아요를 누를 수 없어요.",o="휴대폰 인증 후 좋아요할 수 있어요.",a=(s,e)=>!!e&&!!s?.user_id&&s.user_id===e,E=(s,e=null)=>{const n=String(s?.message||s?.details||"");return n.includes("OWN_POST")?i:n.includes("phone")?o:r(s,"좋아요 처리에 실패했습니다.",e)};export{a as i,E as l};

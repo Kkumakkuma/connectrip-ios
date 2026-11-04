@@ -1,0 +1,3 @@
+import{ay as a}from"./index-BcKgcjfm.js";const l=e=>{const r=e[0]?.title?`‘${String(e[0].title).slice(0,40)}’`:"내 동행";return`이 회원은 내가 모집한 ${e.length>1?`${r} 등 동행 ${e.length}개`:`동행 ${r}`}의 멤버예요. 동행에서도 내보낼까요?
+
+내보내지 않으면 멤버로 남고, 단체 대화방에서 서로의 메시지만 보이지 않아요.`};async function s(e,{confirm:r=t=>window.confirm(t),alert:n=t=>window.alert(t)}={}){if(!e)return!1;let t;try{t=await a.hostedWith(e)}catch{return!1}if(!Array.isArray(t)||t.length===0||!r(l(t)))return!1;let i=0;for(const o of t)try{await a.remove(o.post_id,e)}catch(f){/\bNOT_MEMBER\b/.test(String(f?.message||""))||(i+=1)}return i>0&&n("동행에서 내보내지 못한 글이 있어요. 동행 글의 멤버 칸에서 다시 해 주세요."),i===0}export{s as o};

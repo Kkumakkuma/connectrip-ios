@@ -1,0 +1,16 @@
+App/build
+App/Pods
+App/output
+App/App/public
+DerivedData
+xcuserdata
+
+# Cordova plugins for Capacitor
+capacitor-cordova-ios-plugins
+
+# Generated Config files
+App/App/capacitor.config.json
+App/App/config.xml
+
+# Firebase iOS 설정 — 저장소에 두지 않는다. CI 가 비밀값 FIREBASE_IOS_PLIST_B64 에서 만든다(ios-release.yml).
+App/App/GoogleService-Info.plist
