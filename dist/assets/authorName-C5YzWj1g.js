@@ -1,0 +1,1 @@
+const i="탈퇴한 회원";function e(n){return typeof n=="string"?n.trim():""}function c(...n){for(const t of n){const r=e(t);if(r)return r}return"회원"}function f(n){return n?c(n.nickname):i}function u(n){return!!e(n?.nickname)}function o(n,t){return u(n)?!0:(typeof t=="function"&&t(),!1)}export{f as a,c as d,o as e};

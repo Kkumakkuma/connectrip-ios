@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<!-- 2026-10-02 PASS 결속: 이 주소(본인확인 번호·state)를 Referer 로 보내지 않는다. 사이트 공통 헤더(strict-origin-when-cross-origin)는
+     같은 출처 요청(로고·홈 링크)에는 전체 주소를 보낸다. -->
+<meta name="referrer" content="no-referrer">
+<title>커넥트립 앱으로 돌아가기</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+         background: #f8fafc; color: #1e293b; word-break: keep-all; overflow-wrap: anywhere; }
+  main { max-width: 420px; margin: 0 auto; padding: 56px 20px 32px; text-align: center; }
+  .logo { width: 64px; height: 64px; border-radius: 16px; }
+  h1 { font-size: 20px; margin: 20px 0 10px; }
+  p { font-size: 15px; line-height: 1.7; color: #475569; margin: 0 0 14px; }
+  .btn { display: block; width: 100%; padding: 15px 16px; border-radius: 12px; background: #ff385c; color: #fff;
+         font-size: 16px; font-weight: 700; text-decoration: none; margin: 22px 0 12px; }
+  .sub { font-size: 13px; color: #64748b; }
+  .warn { background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; border-radius: 10px; padding: 10px 12px; font-size: 13px; text-align: left; }
+  a.home { color: #475569; font-size: 13px; }
+  /* hidden 속성(브라우저 기본 display:none)은 .btn 의 display:block 에 진다 — iOS 에서 단추를 확실히 숨기려고 명시(2026-10-02) */
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <img class="logo" src="/icon-192x192.png" alt="">
+  <h1 id="title">커넥트립 앱으로 돌아가 주세요</h1>
+  <p id="lead">이 화면을 닫지 말고 아래 단추를 눌러 주세요</p>
+  <p id="fail" class="warn" hidden>본인확인이 완료되지 않았어요.<br>앱으로 돌아가 다시 시도해 주세요.</p>
+  <a id="go" class="btn" href="#">커넥트립 앱으로 돌아가기</a>
+  <p id="hint" class="sub">단추가 동작하지 않으면 커넥트립 앱에서 「인증 결과 가져오기」를 눌러 주세요</p>
+  <p class="sub"><a class="home" href="https://www.connecttrip.co.kr/">커넥트립 홈페이지로 가기</a></p>
+</main>
+<script>
+// 앱(Capacitor) 밖에서 끝난 PASS 본인확인·결제의 복귀 다리(2026-09-27). 앱의 src/lib/appReturn.js 와 짝:
+//   ?to=<앱 경로>&<나머지 쿼리> → intent://app-return<경로>?<나머지 쿼리>#Intent;scheme=connecttrip;package=<앱>;…;end
+//   (안드로이드 크롬이 우리 앱 패키지로만 넘긴다 → 앱의 AppReturnBridge.jsx 가 받는다)
+// 경로 허용 목록은 appReturn.js APP_RETURN_PATH_RE · IntentUrlPlugin.java 와 같아야 한다(appReturn.test.js 가 대조).
+// 크롬은 사용자 동작 없는 앱 호출을 막을 수 있어 자동 이동은 한 번만 시도하고, 단추를 꼭 둔다.
+//
+// 2026-10-02 PASS 결속(설계 v2 §0-4·§3.3, 테스트 src/lib/appReturnPage.test.js):
+// - 안드로이드·데스크톱 모드 태블릿·PC 는 intent:// + package 고정 단추 하나만 쓴다(안드로이드 UA 를 요구하지 않는다 —
+//   데스크톱 모드 태블릿 보호). 커스텀 스킴(connecttrip://)은 다른 앱이 같은 스킴을 가로챌 수 있어 여기서는 만들지 않는다.
+// - iOS(아이폰·아이패드·아이팟, 데스크톱 모드 아이패드 포함, 2026-10-14 iOS 앱): iOS 에는 패키지를 고정하는 intent 가 없어
+//   connecttrip://app-return<경로>?<쿼리> 단추를 쓴다. iOS 앱은 /app-identity 를 ASWebAuthenticationSession(ephemeral)으로 열고
+//   (ios/App/App/AuthSessionPlugin.swift) 이 페이지도 그 세션 안에서 뜬다 — 세션이 이 이동을 가로채 시작한 앱에만 넘기므로
+//   같은 스킴을 등록한 다른 앱은 ds 를 받지 못한다. 세션 밖(일반 Safari)에서 공격자가 시작한 흐름은 이 장치로 막지 못한다.
+// - 본인확인 비밀값 ds 는 http 주소로 다니지 않는다. 크롬 탭(/app-identity)이 같은 출처 localStorage 'ctAppIdResults'
+//   { [id]: { ds, state, purpose, savedAt } } 에 둔 값을, 성공 복귀(flow=identity, code 없음)이고 저장된 state 가 주소의
+//   state 와 같을 때만 앱으로 넘기는 intent 쿼리에 붙인다. 화면 주소는 바꾸지 않는다. 주소로 들어온 ds 는 버린다.
+// - 읽은 항목은 지우지 않는다(단추를 다시 누르거나 앱에서 '인증 결과 가져오기'를 하면 다시 쓴다). 1시간 지난 것과
+//   5건을 넘는 오래된 것만 정리한다. 저장소가 막혀 있어도 단추·자동 이동은 그대로 동작한다.
+// - 번들·변환을 거치지 않는 정적 파일이라 옛 브라우저에서도 돌도록 ES5 문법(var·function)만 쓴다.
+(function () {
+  var PATH_RE = /^\/(find-id|forgot-password|signup(\/[a-z-]+)?|mypage|points)$/;
+  var PKG = 'com.connecttrip.app';
+  var HOME = 'https://www.connecttrip.co.kr/';
+  var RESULTS_KEY = 'ctAppIdResults';   // src/lib/identity.js(크롬 탭)와 같은 키·형식
+  var RESULT_TTL_MS = 60 * 60 * 1000;
+  var RESULT_MAX = 5;
+  var ID_RE = /^ct[0-9a-f]{32}$/;
+  var STATE_RE = /^[0-9a-f]{32}$/;
+  var DS_RE = /^[0-9a-f]{64}$/;
+
+  function el(id) { return document.getElementById(id); }
+
+  // 1시간 안에 저장된 항목인가. savedAt 은 Date.now() 숫자(ms) — Number() 로 읽어 유한한 숫자가 안 되면(없음·NaN·배열 둘 이상 등)
+  // 형식 오류로 보고 만료처럼 다룬다. src/lib/identity.js freshResult() 와 같은 규칙(숫자 문자열은 받는다 — 2026-10-02 codex 지적).
+  // 미래 시각은 막지 않는다: 기기 시계가 뒤로 보정되면 방금 저장한 항목이 앞서 보일 수 있다(시작 기록과 같은 판정).
+  function fresh(r, now) {
+    if (!r || typeof r !== 'object') return false;
+    var t = Number(r.savedAt);
+    return isFinite(t) && now - t < RESULT_TTL_MS;
+  }
+
+  // 만료분과 5건 초과분(저장 시각이 오래된 것부터)만 지우고 다시 저장한다. 지울 것이 없으면 쓰지 않는다.
+  // 5건 초과 판단은 저장 시각 순서로만 한다(읽었는지와 무관 — 크롬 탭이 저장할 때와 같은 규칙).
+  function tidy(store, map, now) {
+    var keys = Object.keys(map);
+    var keep = keys
+      .filter(function (k) { return fresh(map[k], now); })
+      .sort(function (a, b) { return map[b].savedAt - map[a].savedAt; })
+      .slice(0, RESULT_MAX);
+    if (keep.length === keys.length) return;
+    var out = {};
+    for (var i = 0; i < keep.length; i += 1) out[keep[i]] = map[keep[i]];
+    try { store.setItem(RESULTS_KEY, JSON.stringify(out)); } catch (e) { /* 정리는 다음 기회에 */ }
+  }
+
+  // 크롬 탭이 남긴 이 시도(id)의 ds. 같은 state·1시간 안·형식이 맞을 때만, 아니면 ''.
+  function savedDs(id, state) {
+    if (!ID_RE.test(id) || !STATE_RE.test(state)) return '';
+    var ds = '';
+    try {
+      var store = window.localStorage;
+      var map = JSON.parse(store.getItem(RESULTS_KEY) || 'null');
+      if (!map || typeof map !== 'object' || Array.isArray(map)) return '';
+      var now = Date.now();
+      var hit = Object.prototype.hasOwnProperty.call(map, id) ? map[id] : null;
+      if (fresh(hit, now) && hit.state === state && typeof hit.ds === 'string' && DS_RE.test(hit.ds)) ds = hit.ds;
+      tidy(store, map, now);
+    } catch (e) { /* 저장소를 쓸 수 없는 환경(차단·깨진 값) — ds 없이 단추만 */ }
+    return ds;
+  }
+
+  var ua = navigator.userAgent || '';
+  // 데스크톱 모드 아이패드는 맥 UA 에 터치 지점이 여러 개다
+  var ios = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && (navigator.maxTouchPoints || 0) > 1);
+
+  var sp = new URLSearchParams(location.search);
+  var to = sp.get('to') || '';
+  sp.delete('to');
+  sp.delete('ds');   // 앱으로 가는 ds 는 아래에서 크롬 저장소로만 붙인다
+  if (!PATH_RE.test(to)) to = '';
+  var code = sp.get('code');
+  if (code) el('fail').hidden = false;
+  // to 가 허용 밖이면 앱이 그 주소를 버리므로(appReturnTarget) ds 를 내보낼 이유가 없다
+  if (to && !code && sp.get('flow') === 'identity') {
+    var found = savedDs(sp.get('identityVerificationId') || '', sp.get('state') || '');
+    if (found) sp.set('ds', found);
+  }
+  var q = sp.toString();
+  // 앱 안 주소 부분(경로·쿼리)은 두 플랫폼이 같다 — 앱의 appReturnTarget 이 같은 화면 주소로 푼다
+  var appPart = 'app-return' + (to || '/') + (q ? '?' + q : '');
+  var link = ios
+    ? 'connecttrip://' + appPart
+    : 'intent://' + appPart + '#Intent;scheme=connecttrip;package=' + PKG + ';S.browser_fallback_url=' + encodeURIComponent(HOME) + ';end';
+  el('go').setAttribute('href', link);
+  if (!to) {
+    el('lead').textContent = '커넥트립 앱으로 돌아가 이어서 진행해 주세요.';
+  }
+  // 자동 이동은 한 번만 — 안드로이드 크롬과 iOS(Safari 가 '커넥트립에서 열기' 확인 창을 띄운다)
+  if ((ios || /Android/i.test(ua)) && to) {
+    try { location.href = link; } catch (e) { /* 브라우저가 막으면 단추로 */ }
+  }
+})();
+</script>
+</body>
+</html>

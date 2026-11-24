@@ -1,0 +1,537 @@
+# iOS 릴리스 빌드 — 빌드 전용 공개 저장소(Kkumakkuma/connectrip-ios) (2026-10-21)
+#
+# 이 저장소에는 원본 코드가 없다. 비공개 저장소의 scripts/ios-public-sync.mjs 가 아래만 올린다.
+#   dist/                 앱에 실리는 웹 번들(이미 빌드됨). 앱 공개 값(Supabase 주소·공개 키, PortOne·카카오·구글 지도 키)은
+#                         자리표시자(__CTPUB_이름__)로만 들어 있고, 아래 '앱 공개 값 채우기' 단계가 같은 이름의 비밀값으로 채운다.
+#   ios/                  Capacitor iOS 프로젝트(git 추적 파일만)
+#   package.json · package-lock.json · capacitor.config.json   (npm ci → Capacitor 플러그인 네이티브 소스, cap sync)
+#   release.json          버전·안드로이드 versionCode·원본 커밋·push 여부
+# 공개 저장소의 기본 GitHub 러너는 무료·무제한이다(맥 포함). 그래서 iOS 빌드만 이쪽에서 돌린다.
+# 이 파일의 원본은 비공개 저장소 ios-public/ 에 있다 — 여기서 고치지 말고 그쪽을 고쳐 다시 올린다.
+#
+# 서명은 수동·결정적이다(Xcode 자동 서명을 쓰지 않는다). 인증서·프로필 파일은 base64 로 환경(ios-release) 비밀값에 있다.
+#   프로젝트(ios/App/App.xcodeproj)의 App 타깃 Release 설정이 이 프로필 이름·팀·"Apple Distribution" 을 가리킨다.
+#   (명령줄로 PROVISIONING_PROFILE_SPECIFIER 를 넘기면 SPM 패키지의 리소스 번들 타깃까지 적용돼 빌드가 깨지므로 프로젝트에 둔다.)
+#
+# 실행(손으로만, 쓰기 권한 있는 계정만): gh workflow run ios-release.yml -R Kkumakkuma/connectrip-ios [-f upload=true] [-f build_number=123]
+#   upload=false(기본): 내보내기만(destination export) — 서명·프로필이 맞는지 확인용. 아무것도 올리지 않는다.
+#   upload=true       : App Store Connect 로 업로드(destination upload, API 키 인증).
+#   build_number      : CFBundleVersion. 업로드는 필수(동기화 스크립트 --upload 가 ASC 최고 번호보다 큰 값을 넘긴다).
+#                       내보내기만 할 때 비우면 2000 + run_number*100 + run_attempt.
+#   version           : CFBundleShortVersionString. 비우면 release.json 의 version.
+#
+# 비밀값 = GitHub 환경 "ios-release"(배포 브랜치 main 만)
+#   필수: IOS_DIST_P12_B64 · IOS_DIST_P12_PASSWORD · IOS_PROFILE_B64 · KEYCHAIN_PASSWORD · FIREBASE_IOS_PLIST_B64 · IOS_SIGNER_NAME
+#         VITE_SUPABASE_URL · VITE_SUPABASE_ANON_KEY · VITE_PORTONE_STORE_ID · VITE_PORTONE_CHANNEL_KEY · VITE_KAKAO_JS_KEY ·
+#         VITE_GOOGLE_MAPS_BROWSER_KEY · VITE_GOOGLE_MAPS_MAP_ID (앱 공개 값 — 번들 자리표시자를 채운다)
+#   업로드 때 필수: ASC_KEY_ID · ASC_ISSUER_ID · ASC_KEY_P8_B64
+#   IOS_SIGNER_NAME = 인증서 이름(사람 이름) — 로그에서 가리려고만 쓴다(::add-mask::).
+#
+# 공개 저장소 위생: 실행 로그는 누구나 본다.
+#   - 값을 출력하지 않는다(set -x 금지). 서명자 이름은 각 작업 첫 단계에서 가린다.
+#   - 결과물(ipa·아카이브)·스크린샷은 artifact 로 올리지 않는다. 캐시는 npm·Swift 패키지(공개 소스)만.
+#   - 풀어 쓴 파일(p12·프로필·p8·plist)과 임시 키체인은 마지막 단계(always)에서 지운다.
+#   - 트리거는 workflow_dispatch 하나뿐이다(pull_request 없음 — 포크 PR 이 비밀값에 닿을 길이 없다).
+name: iOS 릴리스 빌드
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: 'App Store Connect 로 업로드(true) / 내보내기만(false, 기본)'
+        type: boolean
+        default: false
+      build_number:
+        description: 'CFBundleVersion 정수(비우면 2000 + run_number*100 + run_attempt)'
+        type: string
+        default: ''
+      version:
+        description: 'CFBundleShortVersionString(예 1.3.19). 비우면 release.json 의 version'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # 맥 러너를 잡기 전에 리눅스에서 값부터 확인한다(비밀값 누락·잘못된 번호면 맥까지 가지 않게).
+  preflight:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: ios-release
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      build_number: ${{ steps.ver.outputs.build_number }}
+    steps:
+      - name: 서명자 이름 가리기
+        env:
+          IOS_SIGNER_NAME: ${{ secrets.IOS_SIGNER_NAME }}
+        run: |
+          if [ -n "$IOS_SIGNER_NAME" ]; then
+            echo "::add-mask::$IOS_SIGNER_NAME"
+            ESC=$(printf '%s' "$IOS_SIGNER_NAME" | sed 's/ /\\ /g')
+            if [ "$ESC" != "$IOS_SIGNER_NAME" ]; then echo "::add-mask::$ESC"; fi
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: release.json
+          sparse-checkout-cone-mode: false
+
+      - name: 버전·빌드 번호
+        id: ver
+        env:
+          BUILD_INPUT: ${{ inputs.build_number }}
+          VERSION_INPUT: ${{ inputs.version }}
+          UPLOAD: ${{ inputs.upload }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          test -f release.json || { echo "::error::release.json 이 없다(동기화 스크립트로 올린 저장소가 아니다)"; exit 1; }
+          REL_VERSION=$(python3 -c 'import json; print(json.load(open("release.json"))["version"])')
+          REL_PUSH=$(python3 -c 'import json; print(str(json.load(open("release.json"))["push"]).lower())')
+          SOURCE=$(python3 -c 'import json; print(json.load(open("release.json")).get("source", ""))')
+          # 번들의 자리표시자 목록이 이 워크플로가 채우는 목록과 같아야 한다(어긋나면 빈 값으로 나간다)
+          REL_PUBLIC=$(python3 -c 'import json; print(",".join(sorted(json.load(open("release.json")).get("publicValues", []))))')
+          WANT_PUBLIC="GOOGLE_MAPS_BROWSER_KEY,GOOGLE_MAPS_MAP_ID,KAKAO_JS_KEY,PORTONE_CHANNEL_KEY,PORTONE_STORE_ID,SUPABASE_ANON_KEY,SUPABASE_URL"
+          if [ "$REL_PUBLIC" != "$WANT_PUBLIC" ]; then
+            echo "::error::release.json publicValues($REL_PUBLIC)가 워크플로 목록과 다르다"
+            exit 1
+          fi
+          if [ -n "$VERSION_INPUT" ]; then VERSION="$VERSION_INPUT"; else VERSION="$REL_VERSION"; fi
+          if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+            echo "::error::버전을 읽지 못했다(입력 version 또는 release.json version): '$VERSION'"
+            exit 1
+          fi
+          if [ "$REL_PUSH" != "true" ]; then
+            echo "::error::release.json push 가 true 가 아니다 — 이 워크플로는 푸시를 켠 번들만 빌드한다"
+            exit 1
+          fi
+          if [ -n "$BUILD_INPUT" ]; then
+            if ! [[ "$BUILD_INPUT" =~ ^[1-9][0-9]{0,8}$ ]]; then
+              echo "::error::build_number 는 1~999999999 정수만 받는다: '$BUILD_INPUT'"
+              exit 1
+            fi
+            BUILD="$BUILD_INPUT"
+          elif [ "$UPLOAD" = "true" ]; then
+            # 올리는 빌드는 App Store Connect 최고 번호보다 커야 한다 — 동기화 스크립트(--upload)가 조회해 넘긴다
+            echo "::error::업로드(upload=true)는 build_number 를 꼭 넘긴다(비공개 저장소 scripts/ios-public-sync.mjs --upload 가 계산)"
+            exit 1
+          else
+            BUILD=$(( 2000 + RUN_NUMBER * 100 + RUN_ATTEMPT ))
+          fi
+          echo "버전 $VERSION / 빌드 $BUILD / 번들 원본 커밋 $SOURCE"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build_number=$BUILD" >> "$GITHUB_OUTPUT"
+
+      - name: 비밀값 확인(이름만 출력)
+        env:
+          UPLOAD: ${{ inputs.upload }}
+          IOS_DIST_P12_B64: ${{ secrets.IOS_DIST_P12_B64 }}
+          IOS_DIST_P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+          IOS_PROFILE_B64: ${{ secrets.IOS_PROFILE_B64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          FIREBASE_IOS_PLIST_B64: ${{ secrets.FIREBASE_IOS_PLIST_B64 }}
+          IOS_SIGNER_NAME: ${{ secrets.IOS_SIGNER_NAME }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_B64: ${{ secrets.ASC_KEY_P8_B64 }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_PORTONE_STORE_ID: ${{ secrets.VITE_PORTONE_STORE_ID }}
+          VITE_PORTONE_CHANNEL_KEY: ${{ secrets.VITE_PORTONE_CHANNEL_KEY }}
+          VITE_KAKAO_JS_KEY: ${{ secrets.VITE_KAKAO_JS_KEY }}
+          VITE_GOOGLE_MAPS_BROWSER_KEY: ${{ secrets.VITE_GOOGLE_MAPS_BROWSER_KEY }}
+          VITE_GOOGLE_MAPS_MAP_ID: ${{ secrets.VITE_GOOGLE_MAPS_MAP_ID }}
+        run: |
+          missing=()
+          required=(IOS_DIST_P12_B64 IOS_DIST_P12_PASSWORD IOS_PROFILE_B64 KEYCHAIN_PASSWORD FIREBASE_IOS_PLIST_B64 IOS_SIGNER_NAME
+                    VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY VITE_PORTONE_STORE_ID VITE_PORTONE_CHANNEL_KEY VITE_KAKAO_JS_KEY
+                    VITE_GOOGLE_MAPS_BROWSER_KEY VITE_GOOGLE_MAPS_MAP_ID)
+          if [ "$UPLOAD" = "true" ]; then required+=(ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8_B64); fi
+          for n in "${required[@]}"; do
+            if [ -n "${!n}" ]; then echo "$n: 있음"; else missing+=("$n"); fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::환경 ios-release 에 없는 비밀값: ${missing[*]}"
+            exit 1
+          fi
+          # 앱 공개 값은 번들 문자열에 그대로 들어간다 — 따옴표·역슬래시·공백이 든 값은 맥까지 가기 전에 멈춘다(채우기 단계와 같은 규칙)
+          for n in VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY VITE_PORTONE_STORE_ID VITE_PORTONE_CHANNEL_KEY VITE_KAKAO_JS_KEY VITE_GOOGLE_MAPS_BROWSER_KEY VITE_GOOGLE_MAPS_MAP_ID; do
+            if ! [[ "${!n}" =~ ^[A-Za-z0-9_.:/=+-]+$ ]]; then echo "::error::$n 값에 넣을 수 없는 문자가 있다"; exit 1; fi
+          done
+          echo "업로드: $UPLOAD"
+
+  ios-release:
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-26
+    environment: ios-release
+    timeout-minutes: 45
+    env:
+      APP_ID: com.connecttrip.app
+      TEAM_ID: SZ93VSVYWA
+      PROFILE_NAME: ConnectTrip App Store
+      VERSION: ${{ needs.preflight.outputs.version }}
+      BUILD_NUMBER: ${{ needs.preflight.outputs.build_number }}
+      UPLOAD: ${{ inputs.upload }}
+    steps:
+      - name: 서명자 이름 가리기
+        env:
+          IOS_SIGNER_NAME: ${{ secrets.IOS_SIGNER_NAME }}
+        run: |
+          if [ -z "$IOS_SIGNER_NAME" ]; then echo "::error::IOS_SIGNER_NAME 없음"; exit 1; fi
+          echo "::add-mask::$IOS_SIGNER_NAME"
+          # xcodebuild 로그는 빌드 설정을 공백 앞에 역슬래시를 붙여(Apple\ Distribution:\ 이름\ 성) 적는다 — 그 모양도 가린다
+          ESC=$(printf '%s' "$IOS_SIGNER_NAME" | sed 's/ /\\ /g')
+          if [ "$ESC" != "$IOS_SIGNER_NAME" ]; then echo "::add-mask::$ESC"; fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 올라온 번들 확인
+        run: |
+          test -f dist/index.html || { echo "::error::dist/index.html 이 없다"; exit 1; }
+          # 파이프+grep -q 는 pipefail 셸에서 앞 명령이 SIGPIPE 로 죽어 결과가 뒤집힐 수 있다 — 값으로 받아 비교
+          if [ -n "$(find dist -name '*.map' -print)" ]; then echo "::error::dist 에 소스맵(.map)이 있다"; exit 1; fi
+          python3 -c 'import json; d = json.load(open("release.json")); print("번들:", d["version"], "versionCode", d.get("versionCode"), "원본", d.get("source"), "빌드 시각", d.get("builtAt"))'
+          du -sh dist
+
+      - name: Xcode 26 선택·버전 기록
+        run: |
+          # 정식판 Xcode 26.x 중 가장 높은 것(베타·RC 제외). 앱스토어는 2026-04-28 부터 iOS 26 SDK 빌드만 받는다.
+          XC=$(ls -d /Applications/Xcode_26.*.app 2>/dev/null | grep -viE 'beta|_rc|release_candidate' | sort -V | tail -1)
+          if [ -z "$XC" ]; then
+            echo "::error::Xcode 26 이 러너에 없다"
+            ls -d /Applications/Xcode*.app || true
+            exit 1
+          fi
+          sudo xcode-select -s "$XC/Contents/Developer"
+          echo "선택: $XC"
+          xcodebuild -version
+          SDK=$(xcrun --sdk iphoneos --show-sdk-version)
+          echo "iphoneos SDK: $SDK"
+          case "$SDK" in
+            26.*|2[7-9].*) ;;
+            *) echo "::error::iOS 26 SDK 가 아니다($SDK)"; exit 1 ;;
+          esac
+          echo "XCODE_APP=$XC" >> "$GITHUB_ENV"
+          # head 로 자르면 xcodebuild 가 Broken pipe 로 죽는다 — 전부 읽어 한 줄로
+          echo "XCODE_VERSION=$(xcodebuild -version | paste -sd ' ' -)" >> "$GITHUB_ENV"
+          echo "IOS_SDK=$SDK" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 의존성 설치(Capacitor CLI·플러그인 네이티브 소스)
+        run: |
+          node --version
+          # 웹 번들은 이미 빌드돼 있어 개발용 패키지가 필요 없다. 설치 스크립트도 돌리지 않는다(서명 비밀값을 푸는 같은 러너라서)
+          npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+          test -x node_modules/.bin/cap || { echo "::error::Capacitor CLI 가 설치되지 않았다"; exit 1; }
+
+      - name: Firebase iOS 설정
+        env:
+          FIREBASE_IOS_PLIST_B64: ${{ secrets.FIREBASE_IOS_PLIST_B64 }}
+        run: |
+          # 번들은 푸시를 켠 채 빌드돼 올라온다(release.json push=true) — 설정 파일이 없으면 앱이 시작 때 멈추므로 필수.
+          PLIST=ios/App/App/GoogleService-Info.plist
+          rm -f "$PLIST"
+          if [ -z "$FIREBASE_IOS_PLIST_B64" ]; then echo "::error::FIREBASE_IOS_PLIST_B64 없음"; exit 1; fi
+          printf '%s' "$FIREBASE_IOS_PLIST_B64" | base64 --decode > "$PLIST"
+          plutil -lint "$PLIST" > /dev/null
+          API_KEY=$(/usr/libexec/PlistBuddy -c 'Print :API_KEY' "$PLIST" 2>/dev/null || true)
+          if [ -n "$API_KEY" ]; then echo "::add-mask::$API_KEY"; fi
+          BID=$(/usr/libexec/PlistBuddy -c 'Print :BUNDLE_ID' "$PLIST")
+          if [ "$BID" != "$APP_ID" ]; then
+            echo "::error::GoogleService-Info.plist 의 BUNDLE_ID 가 $APP_ID 가 아니다"
+            rm -f "$PLIST"
+            exit 1
+          fi
+          echo "GoogleService-Info.plist: $APP_ID 용 확인"
+          echo "PUSH=true" >> "$GITHUB_ENV"
+
+      - name: 앱 공개 값 채우기(자리표시자 → 비밀값)
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_PORTONE_STORE_ID: ${{ secrets.VITE_PORTONE_STORE_ID }}
+          VITE_PORTONE_CHANNEL_KEY: ${{ secrets.VITE_PORTONE_CHANNEL_KEY }}
+          VITE_KAKAO_JS_KEY: ${{ secrets.VITE_KAKAO_JS_KEY }}
+          VITE_GOOGLE_MAPS_BROWSER_KEY: ${{ secrets.VITE_GOOGLE_MAPS_BROWSER_KEY }}
+          VITE_GOOGLE_MAPS_MAP_ID: ${{ secrets.VITE_GOOGLE_MAPS_MAP_ID }}
+        run: |
+          # 공개 저장소의 번들에는 __CTPUB_이름__ 자리표시자만 있다(키를 공개 저장소에 두지 않으려고). 앱에는 원래대로 진짜 값이 실린다.
+          python3 - <<'PY'
+          import os, pathlib, re, sys
+          names = ["SUPABASE_URL", "SUPABASE_ANON_KEY", "PORTONE_STORE_ID", "PORTONE_CHANNEL_KEY",
+                   "KAKAO_JS_KEY", "GOOGLE_MAPS_BROWSER_KEY", "GOOGLE_MAPS_MAP_ID"]
+          vals = {n: os.environ.get("VITE_" + n, "").strip() for n in names}
+          empty = [n for n, v in vals.items() if not v]
+          if empty:
+              sys.exit("비밀값 없음: " + ", ".join(empty))
+          bad = [n for n, v in vals.items() if not re.fullmatch(r"[A-Za-z0-9_.:/=+-]+", v)]
+          if bad:
+              sys.exit("따옴표·역슬래시 같은 문자가 든 값은 넣지 않는다: " + ", ".join(bad))
+          counts = dict.fromkeys(names, 0)
+          for p in pathlib.Path("dist").rglob("*"):
+              if not p.is_file() or p.suffix not in {".js", ".html", ".css", ".json", ".txt", ".webmanifest", ".xml", ".svg"}:
+                  continue
+              t = p.read_bytes().decode("utf-8")                  # 바이트 그대로(줄바꿈 변환 없이)
+              if "__CTPUB_" not in t:
+                  continue
+              for n in names:
+                  ph = "__CTPUB_" + n + "__"
+                  c = t.count(ph)
+                  if c:
+                      t = t.replace(ph, vals[n])
+                      counts[n] += c
+              p.write_bytes(t.encode("utf-8"))
+          left = [str(p) for p in pathlib.Path("dist").rglob("*") if p.is_file() and b"__CTPUB_" in p.read_bytes()]
+          missing = [n for n, c in counts.items() if c == 0]
+          print("채운 자리:", ", ".join(f"{n} {c}" for n, c in counts.items()))
+          if missing or left:
+              sys.exit(f"자리표시자 문제 — 못 찾음 {missing}, 남음 {left[:5]}")
+          PY
+
+      - name: Capacitor iOS 동기화
+        run: |
+          npx cap sync ios
+          test -f ios/App/App/public/index.html
+          plutil -lint ios/App/App/Info.plist ios/App/App/App.entitlements
+
+      - name: 서명 준비 — 임시 키체인·인증서·프로필
+        env:
+          IOS_DIST_P12_B64: ${{ secrets.IOS_DIST_P12_B64 }}
+          IOS_DIST_P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+          IOS_PROFILE_B64: ${{ secrets.IOS_PROFILE_B64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/ct-signing.keychain-db"
+          P12="$RUNNER_TEMP/ct-dist.p12"
+          PP="$RUNNER_TEMP/ct.mobileprovision"
+          echo "KC=$KC" >> "$GITHUB_ENV"
+          umask 077
+          printf '%s' "$IOS_DIST_P12_B64" | base64 --decode > "$P12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
+          security import "$P12" -k "$KC" -P "$IOS_DIST_P12_PASSWORD" -f pkcs12 -T /usr/bin/codesign -T /usr/bin/security > /dev/null
+          rm -f "$P12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          # 서명 신원은 SHA-1 만 남긴다(이름은 공개 로그에 쓰지 않는다)
+          IDS=$(security find-identity -v -p codesigning "$KC")
+          # 실제로 넣은 인증서의 이름을 한 번 더 가린다(비밀값 IOS_SIGNER_NAME 이 인증서 교체 뒤 뒤처져도 아카이브·내보내기 로그에서 가려지게)
+          SIGNER=$(printf '%s\n' "$IDS" | sed -nE 's/.*"Apple Distribution: (.+) \([A-Z0-9]{10}\)".*/\1/p' | sed -n '1p')
+          if [ -n "$SIGNER" ]; then
+            echo "::add-mask::$SIGNER"
+            ESC=$(printf '%s' "$SIGNER" | sed 's/ /\\ /g')
+            if [ "$ESC" != "$SIGNER" ]; then echo "::add-mask::$ESC"; fi
+          fi
+          IDENTITY_SHA1=$(echo "$IDS" | awk '/Apple Distribution:/ { print $2; exit }')
+          if [ -z "$IDENTITY_SHA1" ]; then echo "::error::키체인에 Apple Distribution 서명 신원이 없다"; exit 1; fi
+          echo "서명 신원: Apple Distribution (SHA-1 $IDENTITY_SHA1), 유효 신원 $(echo "$IDS" | grep -c 'Apple Distribution:')개"
+
+          printf '%s' "$IOS_PROFILE_B64" | base64 --decode > "$PP"
+          security cms -D -i "$PP" > "$RUNNER_TEMP/ct-profile.plist"
+          pb() { /usr/libexec/PlistBuddy -c "Print :$1" "$RUNNER_TEMP/ct-profile.plist"; }
+          P_NAME=$(pb Name); P_UUID=$(pb UUID); P_TEAM=$(pb TeamIdentifier:0)
+          P_APPID=$(pb Entitlements:application-identifier); P_APS=$(pb Entitlements:aps-environment); P_EXP=$(pb ExpirationDate)
+          echo "프로필: $P_NAME / $P_UUID / 팀 $P_TEAM / $P_APPID / aps-environment=$P_APS / 만료 $P_EXP"
+          [ "$P_NAME" = "$PROFILE_NAME" ] || { echo "::error::프로필 이름이 '$PROFILE_NAME' 이 아니다"; exit 1; }
+          [ "$P_TEAM" = "$TEAM_ID" ] || { echo "::error::프로필 팀이 $TEAM_ID 가 아니다"; exit 1; }
+          [ "$P_APPID" = "$TEAM_ID.$APP_ID" ] || { echo "::error::프로필 앱 ID 가 $TEAM_ID.$APP_ID 가 아니다"; exit 1; }
+          [ "$P_APS" = "production" ] || { echo "::error::프로필 aps-environment 가 production 이 아니다"; exit 1; }
+          # 프로필에 든 인증서가 키체인의 서명 신원과 같은 것인지(SHA-1 대조)
+          PROFILE_CERT_SHA1=$(python3 -c '
+          import hashlib, plistlib, sys
+          d = plistlib.load(open(sys.argv[1], "rb"))
+          print(" ".join(hashlib.sha1(c).hexdigest().upper() for c in d["DeveloperCertificates"]))
+          ' "$RUNNER_TEMP/ct-profile.plist")
+          echo "프로필 인증서 SHA-1: $PROFILE_CERT_SHA1 / 키체인 신원 SHA-1: $IDENTITY_SHA1"
+          case " $PROFILE_CERT_SHA1 " in
+            *" $IDENTITY_SHA1 "*) echo "인증서 일치" ;;
+            *) echo "::error::프로필의 인증서와 키체인 서명 신원이 다르다"; exit 1 ;;
+          esac
+          # 설치 전에 UUID 를 남긴다 — 복사 도중 실패해도 정리 단계가 지울 수 있게
+          echo "PROFILE_UUID=$P_UUID" >> "$GITHUB_ENV"
+          echo "IDENTITY_SHA1=$IDENTITY_SHA1" >> "$GITHUB_ENV"
+          for d in "$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$d"
+            cp "$PP" "$d/$P_UUID.mobileprovision"
+          done
+          rm -f "$PP" "$RUNNER_TEMP/ct-profile.plist"
+
+      - name: Swift 패키지 캐시
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/spm
+          key: ios-spm-${{ hashFiles('ios/App/App.xcodeproj/project.pbxproj', 'ios/App/CapApp-SPM/Package.swift', 'package-lock.json') }}
+
+      - name: Swift 패키지 받기
+        timeout-minutes: 15
+        run: |
+          xcodebuild -resolvePackageDependencies -project ios/App/App.xcodeproj -scheme App \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm" > "$RUNNER_TEMP/resolve.log" 2>&1 || { tail -40 "$RUNNER_TEMP/resolve.log"; exit 1; }
+          grep -E '^[[:space:]]*(firebase-ios-sdk|capacitor-swift-pm|Firebase|Capacitor)' "$RUNNER_TEMP/resolve.log" | head -20 || true
+          tail -3 "$RUNNER_TEMP/resolve.log"
+
+      - name: 아카이브 (Release, 수동 서명)
+        timeout-minutes: 25
+        run: |
+          set +e
+          xcodebuild archive -project ios/App/App.xcodeproj -scheme App -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm" -disableAutomaticPackageResolution \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            > "$RUNNER_TEMP/archive.log" 2>&1
+          rc=$?
+          set -e
+          if [ $rc -ne 0 ]; then
+            grep -nE "error:|Code Signing|Provisioning" "$RUNNER_TEMP/archive.log" | head -40 || true
+            tail -50 "$RUNNER_TEMP/archive.log" || true
+            exit $rc
+          fi
+          grep -E "GoogleService-Info.plist (included|absent)" "$RUNNER_TEMP/archive.log" | head -2 || true
+          tail -3 "$RUNNER_TEMP/archive.log"
+
+      - name: 아카이브 서명 확인(식별자만)
+        run: |
+          APP="$RUNNER_TEMP/App.xcarchive/Products/Applications/App.app"
+          test -d "$APP"
+          codesign --verify --deep --strict "$APP"
+          # Authority 줄에는 사람 이름이 든다 — 이름 없이 Identifier·TeamIdentifier 만(값으로 받아 비교: pipefail 셸의 grep -q 함정 피함)
+          CS_INFO=$(codesign -dvv "$APP" 2>&1)
+          grep -E '^(Identifier|TeamIdentifier)=' <<< "$CS_INFO"
+          grep -q '^Authority=Apple Distribution:' <<< "$CS_INFO" || { echo "::error::배포 인증서로 서명되지 않았다"; exit 1; }
+          echo "Authority: Apple Distribution(이름 생략)"
+          codesign -d --entitlements - --xml "$APP" > "$RUNNER_TEMP/ent.plist" 2>/dev/null
+          ent() { /usr/libexec/PlistBuddy -c "Print :$1" "$RUNNER_TEMP/ent.plist" 2>/dev/null; }
+          echo "권한: application-identifier=$(ent application-identifier) aps-environment=$(ent aps-environment) get-task-allow=$(ent get-task-allow)"
+          [ "$(ent aps-environment)" = "production" ] || { echo "::error::서명된 앱의 aps-environment 가 production 이 아니다"; exit 1; }
+          [ "$(ent get-task-allow)" = "false" ] || { echo "::error::get-task-allow 가 false 가 아니다(배포 서명이 아님)"; exit 1; }
+          security cms -D -i "$APP/embedded.mobileprovision" > "$RUNNER_TEMP/embedded.plist"
+          E_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/embedded.plist")
+          E_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/embedded.plist")
+          echo "포함된 프로필: $E_NAME / $E_UUID"
+          [ "$E_UUID" = "$PROFILE_UUID" ] || { echo "::error::앱에 든 프로필이 설치한 프로필과 다르다"; exit 1; }
+          plutil -p "$APP/Info.plist" | grep -E '"(CFBundleIdentifier|CFBundleShortVersionString|CFBundleVersion|UIBackgroundModes)"' || true
+          SV=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")
+          BV=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")
+          [ "$SV" = "$VERSION" ] && [ "$BV" = "$BUILD_NUMBER" ] || { echo "::error::버전($SV/$BV)이 기대값($VERSION/$BUILD_NUMBER)과 다르다"; exit 1; }
+          if [ -f "$APP/GoogleService-Info.plist" ]; then HAS_GS=true; else HAS_GS=false; fi
+          echo "GoogleService-Info.plist 포함: $HAS_GS (PUSH=$PUSH)"
+          [ "$HAS_GS" = "$PUSH" ] || { echo "::error::푸시 설정 포함 여부가 빌드 플래그와 다르다"; exit 1; }
+          rm -f "$RUNNER_TEMP/ent.plist" "$RUNNER_TEMP/embedded.plist"
+
+      - name: 내보내기 / 업로드 (xcodebuild -exportArchive)
+        timeout-minutes: 20
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_B64: ${{ secrets.ASC_KEY_P8_B64 }}
+        run: |
+          DEST=export
+          AUTH=()
+          if [ "$UPLOAD" = "true" ]; then
+            DEST=upload
+            P8="$RUNNER_TEMP/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+            mkdir -p "$RUNNER_TEMP/private_keys"
+            ( umask 077; printf '%s' "$ASC_KEY_P8_B64" | base64 --decode > "$P8" )
+            while IFS= read -r line; do
+              case "$line" in ""|-----*) ;; *) echo "::add-mask::$line" ;; esac
+            done < "$P8"
+            AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$P8" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+          fi
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>${DEST}</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${APP_ID}</key><string>${PROFILE_NAME}</string>
+            </dict>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+            <key>uploadSymbols</key><true/>
+          </dict>
+          </plist>
+          EOF
+          plutil -lint "$RUNNER_TEMP/ExportOptions.plist"
+          echo "destination=$DEST"
+          set +e
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export" \
+            "${AUTH[@]}" > "$RUNNER_TEMP/export.log" 2>&1
+          rc=$?
+          set -e
+          rm -f "$RUNNER_TEMP/private_keys/"*.p8
+          if [ $rc -ne 0 ]; then
+            grep -nE "error|Error" "$RUNNER_TEMP/export.log" | head -40 || true
+            tail -40 "$RUNNER_TEMP/export.log" || true
+            exit $rc
+          fi
+          tail -5 "$RUNNER_TEMP/export.log"
+          # 업로드(destination=upload)는 내보내기 폴더를 만들지 않는다
+          if [ "$DEST" = "upload" ]; then
+            grep -E "Upload succeeded|Uploaded" "$RUNNER_TEMP/export.log" | tail -3 || true
+          fi
+          if [ "$DEST" = "export" ]; then
+            ls -la "$RUNNER_TEMP/export"
+            IPA=$(ls "$RUNNER_TEMP/export"/*.ipa | head -1)
+            test -f "$IPA"
+            unzip -l "$IPA" | grep -E 'Payload/App\.app/(App|Info\.plist|embedded\.mobileprovision|GoogleService-Info\.plist)$'
+            # 함께 들어간 프레임워크·리소스 번들(분석 SDK 가 딸려 오지 않았는지 확인용)
+            unzip -l "$IPA" | awk '{print $4}' | grep -E '^Payload/App\.app/(Frameworks/[^/]+\.framework|[^/]+\.bundle)/$' | sort || true
+            echo "IPA_BYTES=$(stat -f %z "$IPA")" >> "$GITHUB_ENV"
+          fi
+
+      - name: 요약
+        run: |
+          {
+            echo "### iOS 릴리스 빌드"
+            echo "- Xcode: $XCODE_VERSION ($XCODE_APP), iphoneos SDK $IOS_SDK"
+            echo "- 버전 $VERSION / 빌드 $BUILD_NUMBER, 번들 $APP_ID"
+            echo "- 서명: Apple Distribution (SHA-1 $IDENTITY_SHA1), 팀 $TEAM_ID"
+            echo "- 프로필: $PROFILE_NAME ($PROFILE_UUID)"
+            echo "- 푸시(Firebase 설정 포함): $PUSH"
+            echo "- 업로드: $UPLOAD${IPA_BYTES:+, ipa ${IPA_BYTES} bytes(올리지 않음)}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 정리 — 키체인·프로필·풀어 쓴 비밀 파일 삭제
+        if: always()
+        run: |
+          if [ -n "$KC" ]; then
+            security delete-keychain "$KC" 2>/dev/null || true
+          fi
+          security list-keychains -d user -s "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null || true
+          if [ -n "$PROFILE_UUID" ]; then
+            rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision" \
+                  "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          fi
+          # 빌드 중간물(dd)에는 번들에 담긴 GoogleService-Info.plist 사본이 남는다 — 같이 지운다
+          rm -rf "$RUNNER_TEMP/private_keys" "$RUNNER_TEMP/export" "$RUNNER_TEMP/App.xcarchive" "$RUNNER_TEMP/dd"
+          rm -f "$RUNNER_TEMP/ct-dist.p12" "$RUNNER_TEMP/ct.mobileprovision" "$RUNNER_TEMP/ct-profile.plist" \
+                "$RUNNER_TEMP/ExportOptions.plist" "$RUNNER_TEMP/ent.plist" "$RUNNER_TEMP/embedded.plist" \
+                ios/App/App/GoogleService-Info.plist
+          echo "정리 끝"
